@@ -4,6 +4,10 @@ import logging
 from fastapi import FastAPI, Request
 from pydantic import BaseModel
 import uvicorn
+import asyncio
+import numpy as np
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+from openml import datasets
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO)
@@ -21,13 +25,10 @@ async def model_chat(request: Request):
     prompt = data.get("prompt", "")
     chat_history = data.get("chat_history", [])
     system_prompt = "You are an assistant designed to help with Blender modeling tasks."
-
     # Simulate getting response from the model
     response_content = f"Generated Python script for: {prompt}"
-    
     new_message = ChatMessage(type="assistant", content=response_content)
     chat_history.append(new_message.dict())
-    
     return {"chat_history": chat_history}
 
 # Start FastAPI server
@@ -42,19 +43,15 @@ class GPT4BlenderOperator(bpy.types.Operator):
     def execute(self, context):
         chat_history = []
         system_prompt = "You are an assistant designed to help with Blender modeling tasks."
-        
         # Get response from model
         prompt = context.scene.gpt4_chat_input
         response_content = requests.post("http://127.0.0.1:8000/model_chat/", json={"prompt": prompt, "chat_history": chat_history}).json()
-        
         logging.info(f"Model Response: {response_content}")
-        
         # Add response to chat history
         new_message = bpy.types.PropertyGroup()
         new_message.type = "assistant"
         new_message.content = response_content["chat_history"][-1]["content"]
         context.scene.gpt4_chat_history.add().update(new_message)
-        
         return {'FINISHED'}
 
 # Register the operator and properties
