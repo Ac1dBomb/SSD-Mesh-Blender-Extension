@@ -5,15 +5,99 @@ import gradio as gr
 import time
 import random
 import gc
+from oneapi import dnnl
+from bpy.types import Panel, Operator
+from bpy.utils import register_class, unregister_class
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 
+# Define a custom Blender panel
+class AIExtensionPanel(Panel):
+    bl_label = "AI Extension"
+    bl_idname = "OBJECT_PT_ai_extension"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = 'AI Tools'
+
+    def draw(self, context):
+        layout = self.layout
+        col = layout.column()
+        # Input fields for connecting to LM Studio
+        col.label(text="LM Studio Connection")
+        col.prop(context.scene, "lm_studio_api_key", text="API Key")
+        # Buttons to load models from LM Studio
+        col.operator("ai.load_model", text="Load Model")
+        # Live updates or visualizations in Blender based on AI inference
+        col.label(text="AI Inference Results")
+        col.prop(context.scene, "ai_output_text", text="", editable=False)
+        # Additional features
+        col.label(text="Object Type Settings")
+        col.prop(context.scene, "object_type", text="Object Type")
+        col.label(text="Tool Settings")
+        col.prop(context.scene, "tool_settings", text="Tool Settings")
+        col.label(text="Material Settings")
+        col.prop(context.scene, "material_settings", text="Material Settings")
+        col.label(text="Lighting Settings")
+        col.prop(context.scene, "lighting_settings", text="Lighting Settings")
+        col.label(text="Camera Settings")
+        col.prop(context.scene, "camera_settings", text="Camera Settings")
+        col.label(text="Animation Settings")
+        col.prop(context.scene, "animation_settings", text="Animation Settings")
+        col.label(text="Physics Settings")
+        col.prop(context.scene, "physics_settings", text="Physics Settings")
+        col.label(text="Rendering Settings")
+        col.prop(context.scene, "rendering_settings", text="Rendering Settings")
+
+# Define a custom Blender operator
+class AI_Load_Model(Operator):
+    bl_label = "Load Model"
+    bl_idname = "ai.load_model"
+
+    def execute(self, context):
+        prompt = "What should the scene look like?"
+        response = get_model_response(prompt, [], "")
+        if response:
+            context.scene.ai_output_text = response
+            update_scene(response)
+        return {'FINISHED'}
+
+# Define a function to interact with the LM Studio API
+def query_lm_studio(prompt):
+    api_url = "http://127.0.0.1:1234/v1/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer dummy-token"  # Replace with an actual token if required
+    }
+    payload = {
+        "model": "llama",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.7,
+        "max_tokens": 512
+    }
+    response = requests.post(api_url, headers=headers, json=payload)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        logging.error(f"Error: {response.status_code}, {response.text}")
+        return None
+
+# Define a function to optimize GPU usage with Intel oneAPI
+def optimize_gpu(model_params):
+    # Use DNNL for optimized computations
+    dnnl_config = {
+        "engine_kind": dnnl.engine_kind.cpu,
+        "device_id": 0
+    }
+    model_params["dnnl"] = dnnl_config
+    return model_params
+
+# Define a function to handle the main logic of the Blender extension
 def get_model_response(prompt, chat_history, system_prompt, model_params=None, retry_count=3):
     try:
         model_params = model_params or {"temperature": 0.7, "top_p": 0.9, "max_tokens": 1500}
+        model_params = optimize_gpu(model_params)  # Optimize for GPU usage
         url = "http://localhost:5000/generate"  # LM Studio API URL
-        
         payload = {
             "model": "llama",  # Model name can be adjusted
             "prompt": prompt,
@@ -21,7 +105,6 @@ def get_model_response(prompt, chat_history, system_prompt, model_params=None, r
             "system_prompt": system_prompt,
             **model_params
         }
-
         # Retry logic for failed requests
         for attempt in range(retry_count):
             try:
@@ -32,75 +115,52 @@ def get_model_response(prompt, chat_history, system_prompt, model_params=None, r
                 logging.error(f"Request failed: {e}")
                 if attempt < retry_count - 1:
                     time.sleep(random.uniform(1, 2))  # Randomized delay before retry
-                    continue
-                return "Error: Request to model failed after multiple attempts."
-        
+                continue
+        return "Error: Request to model failed after multiple attempts."
     except Exception as e:
         logging.error(f"Unexpected error: {e}")
         return "Error: Unexpected issue occurred"
 
-def generate_message_history(chat_history, system_prompt, prompt):
-    # Limit chat history to the last 5 exchanges for optimized payload
-    history_limit = 5
-    messages = [{"role": "system", "content": system_prompt}]
-    
-    for message in chat_history[-history_limit:]:
-        if message["type"] == "assistant":
-            messages.append({"role": "assistant", "content": "```\n" + message["content"] + "\n```"})
-        else:
-            messages.append({"role": message["type"].lower(), "content": message["content"]})
+# Define a function to import mesh from LM Studio
+def import_mesh(prompt):
+    response = query_lm_studio(prompt)
+    if response and 'choices' in response and len(response['choices']) > 0:
+        mesh_data = response['choices'][0]['message']['content']
+        bpy.ops.import_scene.obj(filepath=mesh_data, use_edges=True, use_smooth_groups=False)
+        logging.info("Mesh imported successfully")
+    else:
+        logging.error("Failed to import mesh")
 
-    messages.append({"role": "user", "content": "Can you please write Blender code for me that accomplishes the following task: " + prompt + "? \n. Do not respond with anything that is not Python code. Do not provide explanations"})
-    return messages
+# Define a function to export mesh to LM Studio
+def export_mesh(mesh_name):
+    mesh_object = bpy.data.objects.get(mesh_name)
+    if mesh_object and mesh_object.type == 'MESH':
+        filepath = "/path/to/save/mesh.obj"  # Specify the path to save the mesh file
+        bpy.ops.export_scene.obj(filepath=filepath, use_selection=True)
+        logging.info(f"Mesh {mesh_name} exported successfully")
+    else:
+        logging.error("Invalid or non-existent mesh object")
 
-async def gradio_interface(prompt, state):
-    chat_history = state or []
-    response = await asyncio.to_thread(get_model_response, prompt, chat_history, "You are a helpful Blender scripting assistant.")
-    chat_history.append({"role": "user", "content": prompt})
-    chat_history.append({"role": "assistant", "content": response})
-    
-    # Reduce chat history if it gets too large to save memory
-    if len(chat_history) > 20:
-        chat_history = chat_history[-20:]
-    
-    # Clean up memory and trigger garbage collection
-    gc.collect()
+# Define a function to update scene with AI-generated content
+def update_scene(prompt):
+    clear_scene()
+    import_mesh(prompt)
 
-    return response, chat_history
+# Define a function to clear the current Blender scene
+def clear_scene():
+    bpy.ops.object.select_all(action='SELECT')
+    bpy.ops.object.delete(use_global=False)
+    logging.info("Scene cleared")
 
-# Gradio interface setup with async
-gr.Interface(fn=gradio_interface, inputs=["text", "state"], outputs=["text", "state"]).launch()
+# Register Blender classes and operators
+def register():
+    bpy.utils.register_class(AIExtensionPanel)
+    bpy.utils.register_class(AI_Load_Model)
 
-def init_props():
-    bpy.types.Scene.gpt4_chat_history = bpy.props.CollectionProperty(type=bpy.types.PropertyGroup)
-    bpy.types.Scene.gpt4_model = bpy.props.EnumProperty(
-        name="GPT Model",
-        description="Select the GPT model to use",
-        items=[("local", "Local Model", "Use local model"), ("lm_studio", "LM Studio", "Use LM Studio model")],
-        default="local",
-    )
-    bpy.types.Scene.gpt4_chat_input = bpy.props.StringProperty(
-        name="Message",
-        description="Enter your message",
-        default="",
-    )
-    bpy.types.Scene.gpt4_button_pressed = bpy.props.BoolProperty(default=False)
-    bpy.types.PropertyGroup.type = bpy.props.StringProperty()
-    bpy.types.PropertyGroup.content = bpy.props.StringProperty()
+# Unregister Blender classes and operators
+def unregister():
+    bpy.utils.unregister_class(AIExtensionPanel)
+    bpy.utils.unregister_class(AI_Load_Model)
 
-def clear_props():
-    del bpy.types.Scene.gpt4_chat_history
-    del bpy.types.Scene.gpt4_chat_input
-    del bpy.types.Scene.gpt4_button_pressed
-
-def split_area_to_text_editor(context):
-    area = context.area
-    for region in area.regions:
-        if region.type == 'WINDOW':
-            override = {'area': area, 'region': region}
-            bpy.ops.screen.area_split(override, direction='VERTICAL', factor=0.5)
-            break
-
-    new_area = context.screen.areas[-1]
-    new_area.type = 'TEXT_EDITOR'
-    return new_area
+if __name__ == "__main__":
+    register()

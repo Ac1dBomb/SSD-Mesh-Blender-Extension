@@ -1,6 +1,8 @@
 requests==2.32.3
 onnx==1.17.0
 onnxruntime==1.20.1
+onnxruntime-openvino
+onnxruntime-directml
 flask==3.1.0
 fastapi==0.115.5
 torchserve==0.12.0
