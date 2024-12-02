@@ -10,6 +10,17 @@ from openml import datasets
 import oneapi as oa
 from intelPython import ip
 
+bl_info = {
+    "name": "SSD Mesh Blender Extension",
+    "author": "AcidBomb",
+    "version": (1, 0, 1),
+    "blender": (3, 4, 0),
+    "location": "View3D > Tools",
+    "description": "Custom SSD Mesh manipulation LLM addon",
+    "warning": "",
+    "category": "Object",
+}
+
 # Configure logging
 logging.basicConfig(level=logging.ERROR)
 
@@ -168,58 +179,58 @@ def handle_chatbox_commands(command, chat_history):
             output_format = command.split(" ")[2]
             bpy.context.scene.render.output_format = output_format
             chat_history.append({"type": "assistant", "content": f"Rendering output format set to {output_format}"})
+
+def init_props():
+    bpy.types.Scene.gpt4_chat_input = bpy.props.StringProperty(name="Input", description="Enter your command here")
+    bpy.types.Scene.gpt4_button_pressed = bpy.props.BoolProperty(default=False)
+    bpy.types.Scene.gpt4_chat_history = bpy.props.CollectionProperty(type=bpy.types.PropertyGroup)
+
+def clear_props():
+    del bpy.types.Scene.gpt4_chat_input
+    del bpy.types.Scene.gpt4_button_pressed
+    del bpy.types.Scene.gpt4_chat_history
+
+# Class definition for the Blender operator
 class GPT4BlenderOperator(bpy.types.Operator):
     bl_idname = "wm.gpt4_generate_response"
     bl_label = "Generate Blender Code"
 
     def execute(self, context):
-        # Ensure the button is pressed only once to avoid multiple submissions
         if context.scene.gpt4_button_pressed:
             return {'CANCELLED'}
-        # Mark button as pressed to avoid resubmission
         context.scene.gpt4_button_pressed = True
         prompt = context.scene.gpt4_chat_input
-        # Get the response asynchronously and update chat history
         loop = asyncio.get_event_loop()
         ai_response = loop.run_in_executor(None, get_model_response, prompt, context.scene.gpt4_chat_history, "system message")
         if ai_response:
             context.scene.gpt4_chat_history.append({"role": "assistant", "content": ai_response})
         else:
             context.scene.gpt4_chat_history.append({"role": "assistant", "content": "Error connecting to AI server."})
-        # Update Blender text editor with the result
         text_editor = split_area_to_text_editor(context)
         if len(context.scene.gpt4_chat_history) > 1:
             text_editor.text = context.scene.gpt4_chat_history[-1]["content"]
-        # Reset button press flag
         context.scene.gpt4_button_pressed = False
         return {'FINISHED'}
 
-# Register operator and add panel to Blender UI
-def register():
-    bpy.utils.register_class(GPT4BlenderOperator)
-    init_props()
-    # Add custom panel to Blender's UI
-    bpy.types.VIEW3D_PT_tools_object.append(draw_panel)
-
-def unregister():
-    bpy.utils.unregister_class(GPT4BlenderOperator)
-    clear_props()
-    # Remove custom panel
-    bpy.types.VIEW3D_PT_tools_object.remove(draw_panel)
-
-# Panel for user input in Blender UI
+# Function to draw the panel in Blender UI
 def draw_panel(self, context):
     layout = self.layout
     layout.label(text="Blender GPT-4 Integration")
     layout.prop(context.scene, "gpt4_chat_input")
     layout.operator("wm.gpt4_generate_response", text="Generate Python Code")
-    # Display chat history
-    for message in context.scene.gpt4_chat_history:
-        if message["role"] == "user":
-            layout.label(text=f"User: {message['content']}")
-        elif message["role"] == "assistant":
-            layout.label(text=f"AI: {message['content']}")
 
-# Run the register function to initialize
+# Register functions to add the operator and panel to Blender UI
+def register():
+    bpy.utils.register_class(GPT4BlenderOperator)
+    init_props()
+    bpy.types.VIEW3D_PT_tools_object.append(draw_panel)
+
+# Unregister functions to remove the operator and panel from Blender UI
+def unregister():
+    bpy.utils.unregister_class(GPT4BlenderOperator)
+    clear_props()
+    bpy.types.VIEW3D_PT_tools_object.remove(draw_panel)
+
+# Run these functions if this script is executed as the main module
 if __name__ == "__main__":
     register()

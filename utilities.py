@@ -6,6 +6,8 @@ import time
 import random
 import gc
 from oneapi import dnnl
+import llama.cpp
+from openvino.runtime import Core, CompiledModel
 from bpy.types import Panel, Operator
 from bpy.utils import register_class, unregister_class
 
@@ -56,7 +58,7 @@ class AI_Load_Model(Operator):
 
     def execute(self, context):
         prompt = "What should the scene look like?"
-        response = get_model_response(prompt, [], "")
+        response = get_model_response(prompt, [], "", model_params=None, retry_count=3)
         if response:
             context.scene.ai_output_text = response
             update_scene(response)
@@ -91,6 +93,33 @@ def optimize_gpu(model_params):
     }
     model_params["dnnl"] = dnnl_config
     return model_params
+
+# Define a function to load and optimize the model using OpenVINO
+def load_model(model_path):
+    core = Core()
+    model = core.read_model(model_path)
+    compiled_model = core.compile_model(model, "GPU")
+    return compiled_model
+
+# Define a function to run inference with OpenVINO
+def infer_with_openvino(compiled_model, input_data):
+    input_tensor = compiled_model.input("input").create_buffer(shape=(1, 256), dtype=np.float32)
+    output_tensor = compiled_model.output("output").create_buffer()
+    input_tensor.copy_from(input_data)
+    compiled_model inference([input_tensor], [output_tensor])
+    return np.frombuffer(output_tensor.memory.read(), dtype=np.float32)
+
+def load_model_llm_ipex(model_path):
+    import intel_extension_for_pytorch as ipex
+    from torch.jit import script, trace
+    model = torch.load(model_path)
+    model = ipex.optimize(model, "ipex")
+    return model
+
+# Define a function to run inference with LLM-IPEX
+def infer_with_llm_ipex(model, input_data):
+    output = model(input_data)
+    return output.detach().numpy()
 
 # Define a function to handle the main logic of the Blender extension
 def get_model_response(prompt, chat_history, system_prompt, model_params=None, retry_count=3):
@@ -131,6 +160,38 @@ def import_mesh(prompt):
     else:
         logging.error("Failed to import mesh")
 
+def create_mesh_object(mesh_name):
+    bpy.ops.mesh.primitive_cube_add(size=2)
+    new_mesh = bpy.context.object
+    new_mesh.name = mesh_name
+    logging.info(f"Mesh {mesh_name} created successfully")
+    return new_mesh
+
+# Define a function to read existing mesh objects
+def list_mesh_objects():
+    mesh_list = [obj for obj in bpy.data.objects if obj.type == 'MESH']
+    logging.info("Existing mesh objects listed")
+    return mesh_list
+
+# Define a function to update an existing mesh object
+def update_mesh_object(mesh_name, new_mesh_data):
+    mesh_object = bpy.data.objects.get(mesh_name)
+    if mesh_object and mesh_object.type == 'MESH':
+        # Example update logic: change size
+        mesh_object.scale *= 2
+        logging.info(f"Mesh {mesh_name} updated successfully")
+    else:
+        logging.error("Invalid or non-existent mesh object")
+
+# Define a function to delete an existing mesh object
+def delete_mesh_object(mesh_name):
+    mesh_object = bpy.data.objects.get(mesh_name)
+    if mesh_object and mesh_object.type == 'MESH':
+        bpy.data.objects.remove(mesh_object, do_unlink=True)
+        logging.info(f"Mesh {mesh_name} deleted successfully")
+    else:
+        logging.error("Invalid or non-existent mesh object")
+
 # Define a function to export mesh to LM Studio
 def export_mesh(mesh_name):
     mesh_object = bpy.data.objects.get(mesh_name)
@@ -141,11 +202,46 @@ def export_mesh(mesh_name):
     else:
         logging.error("Invalid or non-existent mesh object")
 
-# Define a function to update scene with AI-generated content
+# Define a function for multi-modal agent recursive chain-of-thought
+def multi_modal_agent(prompt):
+    # Initialize the chain of thought
+    thought_sequence = [prompt]
+    # Recursive loop for chaining thoughts
+    while len(thought_sequence) < 5:  # Limiting to 5 iterations
+        new_prompt = refine_prompt(thought_sequence[-1])
+        response = query_lm_studio(new_prompt)
+        thought_sequence.append(response['choices'][0]['message']['content'])
+    return thought_sequence
+
+# Define a function to refine prompt based on the chain of thought
+def refine_prompt(prev_thought):
+    # Example refinement logic: append "Refine:" prefix
+    return "Refine: " + prev_thought
+def recursive_queries(prompt, depth=0):
+    if depth < 3:  # Limiting to 3 levels of recursion
+        response = query_lm_studio(prompt)
+        new_prompt = refine_query(response['choices'][0]['message']['content'])
+        return [response] + recursive_queries(new_prompt, depth + 1)
+    else:
+        return []
+
+# Define a function to refine query based on the response
+def refine_query(prev_response):
+    # Example refinement logic: append "Refine:" prefix
+    return "Refine: " + prev_response
+
+# Define a function for recursive virtual iteration in update_scene
 def update_scene(prompt):
     clear_scene()
-    import_mesh(prompt)
+    query_results = recursive_queries(prompt)
+    for result in query_results:
+        import_mesh(result['choices'][0]['message']['content'])
 
+# Define a function for multi-modal agent recursive chain-of-thought in update_scene
+def update_scene(prompt):
+    clear_scene()
+    thought_sequence = multi_modal_agent(prompt)
+    import_mesh(thought_sequence[-1])
 # Define a function to clear the current Blender scene
 def clear_scene():
     bpy.ops.object.select_all(action='SELECT')
